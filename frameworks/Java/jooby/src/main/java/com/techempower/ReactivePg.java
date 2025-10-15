@@ -1,44 +1,30 @@
 package com.techempower;
 
+import static com.techempower.Util.boxedRandomWorld;
 import static com.techempower.Util.randomWorld;
 import static io.jooby.ExecutionMode.EVENT_LOOP;
 import static io.jooby.MediaType.JSON;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
-import com.fizzed.rocker.RockerOutputFactory;
-import io.jooby.Context;
-import io.jooby.Jooby;
-import io.jooby.MediaType;
-import io.jooby.ServerOptions;
-import io.jooby.rocker.ByteBufferOutput;
+import io.jooby.*;
 import io.jooby.rocker.RockerModule;
 import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.RowIterator;
 import io.vertx.sqlclient.Tuple;
 
 public class ReactivePg extends Jooby {
-
   {
-    /** Reduce the number of resources due we do reactive processing. */
-    setServerOptions(
-        new ServerOptions()
-            .setIoThreads(Runtime.getRuntime().availableProcessors() + 1)
-            .setWorkerThreads(Runtime.getRuntime().availableProcessors() + 1)
-    );
-
     /** PG client: */
     PgClient client = new PgClient(getConfig().getConfig("db"));
 
     /** Template engine: */
-    install(new RockerModule().reuseBuffer(true));
+    install(new RockerModule());
+    Json.configure(getOutputFactory());
 
     /** Single query: */
     get("/db", ctx -> {
-      client.selectWorld(Tuple.of(randomWorld()), rsp -> {
+      client.selectWorld(Tuple.of(boxedRandomWorld()), rsp -> {
         if (rsp.succeeded()) {
           RowIterator<Row> rs = rsp.result().iterator();
           Row row = rs.next();
@@ -49,7 +35,7 @@ public class ReactivePg extends Jooby {
         }
       });
       return ctx;
-    }).setNonBlocking(true);
+    });
 
     /** Multiple queries: */
     get("/queries", ctx -> {
@@ -70,31 +56,24 @@ public class ReactivePg extends Jooby {
         }
       });
       return ctx;
-    }).setNonBlocking(true);
+    });
 
     /** Update queries: */
     get("/updates", ctx -> {
       int queries = Util.queries(ctx);
       World[] result = new World[queries];
-      client.selectWorldForUpdate(queries, (index, statement) -> {
-        int id = randomWorld();
-        statement.execute(Tuple.of(id), selectCallback -> {
-          if (selectCallback.failed()) {
-            sendError(ctx, selectCallback.cause());
+      var updater = client.updater();
+      updater.selectWorldForUpdate(queries, (index, statement) -> {
+        statement.execute(Tuple.of(boxedRandomWorld())).onComplete(rsp -> {
+          if (rsp.failed()) {
+            sendError(ctx, rsp.cause());
             return;
           }
           result[index] = new World(
-              selectCallback.result().iterator().next().getInteger(0),
-              randomWorld());
+              rsp.result().iterator().next().getInteger(0),
+              boxedRandomWorld());
           if (index == queries - 1) {
-            // Sort results... avoid dead locks
-            Arrays.sort(result);
-            List<Tuple> batch = new ArrayList<>(queries);
-            for (World world : result) {
-              batch.add(Tuple.of(world.getRandomNumber(), world.getId()));
-            }
-
-            client.updateWorld(batch, updateCallback -> {
+            updater.updateWorld(result, updateCallback -> {
               if (updateCallback.failed()) {
                 sendError(ctx, updateCallback.cause());
               } else {
@@ -106,10 +85,9 @@ public class ReactivePg extends Jooby {
         });
       });
       return ctx;
-    }).setNonBlocking(true);
+    });
 
     /** Fortunes: */
-    RockerOutputFactory<ByteBufferOutput> factory = require(RockerOutputFactory.class);
     get("/fortunes", ctx -> {
       client.fortunes(rsp -> {
         if (rsp.succeeded()) {
@@ -125,15 +103,14 @@ public class ReactivePg extends Jooby {
           Collections.sort(fortunes);
 
           /** render view: */
-          views.fortunes template = views.fortunes.template(fortunes);
           ctx.setResponseType(MediaType.html)
-              .send(template.render(factory).toBuffer());
+                  .render(views.fortunes.template(fortunes));
         } else {
           sendError(ctx, rsp.cause());
         }
       });
       return ctx;
-    }).setNonBlocking(true);
+    });
   }
 
   private void sendError(Context ctx, Throwable cause) {

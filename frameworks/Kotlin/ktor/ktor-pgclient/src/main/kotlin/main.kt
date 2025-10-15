@@ -1,29 +1,15 @@
-import io.ktor.http.*
 import io.ktor.server.application.*
-import io.ktor.server.engine.*
 import io.ktor.server.html.*
-import io.ktor.server.netty.*
 import io.ktor.server.plugins.defaultheaders.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import io.vertx.kotlin.coroutines.await
+import io.vertx.kotlin.coroutines.coAwait
+import io.vertx.pgclient.PgBuilder
 import io.vertx.pgclient.PgConnectOptions
-import io.vertx.pgclient.PgPool
 import io.vertx.sqlclient.PoolOptions
 import io.vertx.sqlclient.Tuple
 import kotlinx.html.*
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.util.concurrent.ThreadLocalRandom
-
-@Serializable
-data class Message(val message: String)
-
-@Serializable
-data class World(val id: Int, val randomNumber: Int)
-
-data class Fortune(val id: Int, val message: String)
 
 val rand: ThreadLocalRandom
     get() = ThreadLocalRandom.current()
@@ -35,6 +21,12 @@ interface Repository {
 }
 
 class PgclientRepository : Repository {
+    companion object {
+        private const val FORTUNES_QUERY = "select id, message from FORTUNE"
+        private const val SELECT_WORLD_QUERY = "SELECT id, randomnumber from WORLD where id=$1"
+        private const val UPDATE_WORLD_QUERY = "UPDATE WORLD SET randomnumber=$1 WHERE id=$2"
+    }
+
     private val connectOptions =
         PgConnectOptions().apply {
             port = 5432
@@ -47,21 +39,23 @@ class PgclientRepository : Repository {
         }
 
     private val poolOptions = PoolOptions()
-    private val client = ThreadLocal.withInitial { PgPool.client(connectOptions, poolOptions) }
-    private fun client() = client.get()
+    private val client = PgBuilder.client()
+        .with(poolOptions)
+        .connectingTo(connectOptions)
+        .build()
 
     override suspend fun getFortunes(): List<Fortune> {
-        val results = client().preparedQuery("select id, message from fortune").execute().await()
+        val results = client.preparedQuery(FORTUNES_QUERY).execute().coAwait()
         return results.map { Fortune(it.getInteger(0), it.getString(1)) }
     }
 
     override suspend fun getWorld(): World {
         val worldId = rand.nextInt(1, 10001)
         val result =
-            client()
-                .preparedQuery("select id, randomNumber from world where id = $1")
+            client
+                .preparedQuery(SELECT_WORLD_QUERY)
                 .execute(Tuple.of(worldId))
-                .await()
+                .coAwait()
         val row = result.first()
         return World(row.getInteger(0), row.getInteger(1)!!)
     }
@@ -69,10 +63,10 @@ class PgclientRepository : Repository {
     override suspend fun updateWorlds(worlds: List<World>) {
         // Worlds should be sorted before being batch-updated with to avoid data race and deadlocks.
         val batch = worlds.sortedBy { it.id }.map { Tuple.of(it.randomNumber, it.id) }
-        client()
-            .preparedQuery("update world set randomNumber = $1 where id = $2")
+        client
+            .preparedQuery(UPDATE_WORLD_QUERY)
             .executeBatch(batch)
-            .await()
+            .coAwait()
     }
 }
 
@@ -115,54 +109,45 @@ class FortuneTemplate(
     }
 }
 
-fun main() {
+fun Application.main() {
     val db = PgclientRepository()
 
-    val server = embeddedServer(Netty, 8080, configure = {
-        shareWorkGroup = true
-    }) {
-        install(DefaultHeaders)
-        routing {
-            get("/plaintext") {
-                call.respondText("Hello, World!")
-            }
+    install(DefaultHeaders)
+    routing {
+        get("/plaintext") {
+            call.respondText("Hello, World!")
+        }
 
-            get("/json") {
-                call.respondText(
-                    Json.encodeToString(Message("Hello, World!")),
-                    ContentType.Application.Json
-                )
-            }
+        get("/json") {
+            call.respondJson(Message("Hello, World!"))
+        }
 
-            get("/db") {
-                call.respondText(Json.encodeToString(db.getWorld()), ContentType.Application.Json)
-            }
+        get("/db") {
+            call.respondJson(db.getWorld())
+        }
 
-            get("/query") {
-                val queries = call.parameters["queries"]?.toBoxedInt(1..500) ?: 1
-                val worlds = List(queries) { db.getWorld() }
-                call.respondText(Json.encodeToString(worlds), ContentType.Application.Json)
-            }
+        get("/query") {
+            val queries = call.parameters["queries"]?.toBoxedInt(1..500) ?: 1
+            val worlds = List(queries) { db.getWorld() }
+            call.respondJson(worlds)
+        }
 
-            get("/fortunes") {
-                val newFortune = Fortune(0, "Additional fortune added at request time.")
-                val fortunes = db.getFortunes().toMutableList()
-                fortunes.add(newFortune)
-                fortunes.sortBy { it.message }
-                call.respondHtmlTemplate(FortuneTemplate(fortunes)) { }
-            }
+        get("/fortunes") {
+            val newFortune = Fortune(0, "Additional fortune added at request time.")
+            val fortunes = db.getFortunes().toMutableList()
+            fortunes.add(newFortune)
+            fortunes.sortBy { it.message }
+            call.respondHtmlTemplate(FortuneTemplate(fortunes)) { }
+        }
 
-            get("/updates") {
-                val queries = call.parameters["queries"]?.toBoxedInt(1..500) ?: 1
-                val worlds = List(queries) { db.getWorld() }
-                val newWorlds = worlds.map { it.copy(randomNumber = rand.nextInt(1, 10001)) }
+        get("/updates") {
+            val queries = call.parameters["queries"]?.toBoxedInt(1..500) ?: 1
+            val worlds = List(queries) { db.getWorld() }
+            val newWorlds = worlds.map { it.copy(randomNumber = rand.nextInt(1, 10001)) }
 
-                db.updateWorlds(newWorlds)
+            db.updateWorlds(newWorlds)
 
-                call.respondText(Json.encodeToString(newWorlds), ContentType.Application.Json)
-            }
+            call.respondJson(newWorlds)
         }
     }
-
-    server.start(wait = true)
 }

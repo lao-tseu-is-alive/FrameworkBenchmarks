@@ -1,5 +1,7 @@
 package com.techempower;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.function.BiConsumer;
@@ -32,10 +34,51 @@ public class PgClient {
   private static final String SELECT_FORTUNE = "SELECT id, message from FORTUNE";
 
   private static class DbConnection {
+    private SqlClientInternal queries;
     private PreparedQuery<RowSet<Row>> SELECT_WORLD_QUERY;
     private PreparedQuery<RowSet<Row>> SELECT_FORTUNE_QUERY;
     private PreparedQuery<RowSet<Row>> UPDATE_WORLD_QUERY;
-    private SqlClientInternal connection;
+    private SqlClientInternal updates;
+    @SuppressWarnings("unchecked")
+    private PreparedQuery<RowSet<Row>>[] AGGREGATED_UPDATE_WORLD_QUERY = new PreparedQuery[500];
+  }
+
+  public static class PgUpdate {
+      private DbConnection connection;
+
+    public PgUpdate(DbConnection connection) {
+      this.connection = connection;
+    }
+
+    public void selectWorldForUpdate(int queries, BiConsumer<Integer, PreparedQuery<RowSet<Row>>> consumer) {
+      connection.queries.group(c -> {
+        PreparedQuery<RowSet<Row>> statement = c.preparedQuery(SELECT_WORLD);
+        for (int i = 0; i < queries; i++) {
+          consumer.accept(i, statement);
+        }
+      });
+    }
+
+    public void updateWorld(World[] worlds, Handler<AsyncResult<RowSet<Row>>> handler) {
+      Arrays.sort(worlds);
+      int len = worlds.length;
+      if (0 < len && len <= connection.AGGREGATED_UPDATE_WORLD_QUERY.length) {
+        List<Object> arguments = new ArrayList<>();
+        for (World world : worlds) {
+          arguments.add(world.getId());
+          arguments.add(world.getRandomNumber());
+        }
+        Tuple tuple = Tuple.tuple(arguments);
+        PreparedQuery<RowSet<Row>> query = connection.AGGREGATED_UPDATE_WORLD_QUERY[len - 1];
+        query.execute(tuple).onComplete(handler);
+      } else {
+        List<Tuple> batch = new ArrayList<>();
+        for (World world : worlds) {
+          batch.add(Tuple.of(world.getRandomNumber(), world.getId()));
+        }
+        connection.UPDATE_WORLD_QUERY.executeBatch(batch).onComplete(handler);
+      }
+    }
   }
 
   private static class DbConnectionFactory extends ThreadLocal<DbConnection> {
@@ -64,20 +107,32 @@ public class PgClient {
                 .setWorkerPoolSize(1)
                 .setInternalBlockingPoolSize(1)
         );
-        var future = PgConnection.connect(vertx, options)
+        var client1 = PgConnection.connect(vertx, options)
             .flatMap(conn -> {
-              result.connection = (SqlClientInternal) conn;
+              result.queries = (SqlClientInternal) conn;
               Future<PreparedStatement> f1 = conn.prepare(SELECT_WORLD)
                   .andThen(onSuccess(ps -> result.SELECT_WORLD_QUERY = ps.query()));
               Future<PreparedStatement> f2 = conn.prepare(SELECT_FORTUNE)
                   .andThen(onSuccess(ps -> result.SELECT_FORTUNE_QUERY = ps.query()));
-              Future<PreparedStatement> f3 = conn.prepare(UPDATE_WORLD)
-                  .andThen(onSuccess(ps -> result.UPDATE_WORLD_QUERY = ps.query()));
-              return Future.join(f1, f2, f3);
-            })
-            .toCompletionStage()
-            .toCompletableFuture()
-            .get();
+              return Future.join(f1, f2);
+            });
+
+        var client2 = PgConnection.connect(vertx, options)
+                .flatMap(conn -> {
+                  result.updates = (SqlClientInternal) conn;
+                  List<Future<?>> list = new ArrayList<>();
+                  Future<PreparedStatement> f1 = conn.prepare(UPDATE_WORLD)
+                          .andThen(onSuccess(ps -> result.UPDATE_WORLD_QUERY = ps.query()));
+                  list.add(f1);
+                  for (int i = 0; i < result.AGGREGATED_UPDATE_WORLD_QUERY.length; i++) {
+                    int idx = i;
+                    list.add(conn
+                            .prepare(buildAggregatedUpdateQuery(1 + idx))
+                            .andThen(onSuccess(ps -> result.AGGREGATED_UPDATE_WORLD_QUERY[idx] = ps.query())));
+                  }
+                  return Future.join(list);
+                });
+        var future = Future.join(client1, client2).toCompletionStage().toCompletableFuture().get();
 
         Throwable cause = future.cause();
         if (cause != null) {
@@ -91,6 +146,18 @@ public class PgClient {
         throw SneakyThrows.propagate(ex.getCause());
       }
     }
+
+    private static String buildAggregatedUpdateQuery(int len) {
+      StringBuilder sb = new StringBuilder();
+      sb.append("UPDATE world SET randomNumber = update_data.randomNumber FROM (VALUES");
+      char sep = ' ';
+      for (int i = 1;i <= len;i++) {
+        sb.append(sep).append("($").append(2 * i - 1).append("::int,$").append(2 * i).append("::int)");
+        sep = ',';
+      }
+      sb.append(") AS update_data (id, randomNumber) WHERE  world.id = update_data.id");
+      return sb.toString();
+    }
   }
 
   private final ThreadLocal<DbConnection> sqlClient;
@@ -100,33 +167,23 @@ public class PgClient {
   }
 
   public void selectWorld(Tuple row, Handler<AsyncResult<RowSet<Row>>> handler) {
-    this.sqlClient.get().SELECT_WORLD_QUERY.execute(row, handler);
+    this.sqlClient.get().SELECT_WORLD_QUERY.execute(row).onComplete(handler);
   }
 
   public void selectWorlds(int queries, Handler<AsyncResult<RowSet<Row>>> handler) {
-    this.sqlClient.get().connection.group(c -> {
+    this.sqlClient.get().queries.group(c -> {
       for (int i = 0; i < queries; i++) {
-        c.preparedQuery(SELECT_WORLD).execute(Tuple.of(Util.randomWorld()), handler);
+        c.preparedQuery(SELECT_WORLD).execute(Tuple.of(Util.boxedRandomWorld())).onComplete(handler);
       }
     });
   }
 
   public void fortunes(Handler<AsyncResult<RowSet<Row>>> handler) {
-    this.sqlClient.get().SELECT_FORTUNE_QUERY.execute(handler);
+    this.sqlClient.get().SELECT_FORTUNE_QUERY.execute().onComplete(handler);
   }
 
-  public void selectWorldForUpdate(int queries,
-      BiConsumer<Integer, PreparedQuery<RowSet<Row>>> consumer) {
-    this.sqlClient.get().connection.group(c -> {
-      PreparedQuery<RowSet<Row>> statement = c.preparedQuery(SELECT_WORLD);
-      for (int i = 0; i < queries; i++) {
-        consumer.accept(i, statement);
-      }
-    });
-  }
-
-  public void updateWorld(List<Tuple> batch, Handler<AsyncResult<RowSet<Row>>> handler) {
-    this.sqlClient.get().UPDATE_WORLD_QUERY.executeBatch(batch, handler);
+  public PgUpdate updater() {
+    return new PgUpdate(sqlClient.get());
   }
 
   private PgConnectOptions pgPoolOptions(Config config) {

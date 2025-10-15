@@ -1,11 +1,19 @@
 [package]
-name = "ohkami"
-version = "0.1.0"
-edition = "2021"
+name    = "framework_benchmarks"
+version = "0.24.0"
+edition = "2024"
+authors = ["kanarus <kanarus786@gmail.com>"]
 
 [dependencies]
-ohkami = { version = "0.3.3", features = ["sqlx", "postgres"] }
-serde = { version = "1.0", features = ["derive"] }
-sqlx = "0.6"
-rand = "0.8.5"
-yarte = "0.15"
+ohkami         = { version = "0.24" }
+tokio          = { optional = true, version = "1.47", features = ["rt"] }
+tokio-postgres = { optional = true, version = "0.7" }
+yarte          = { optional = true, version = "0.15" }
+futures-util   = { optional = true, version = "0.3"  }
+rand           = { optional = true, version = "0.8", features = ["small_rng"] }
+
+[features]
+rt_tokio   = ["ohkami/rt_tokio", "tokio", "tokio-postgres", "yarte", "futures-util", "rand"]
+rt_smol    = ["ohkami/rt_smol"]
+rt_glommio = ["ohkami/rt_glommio"]
+rt_nio     = ["ohkami/rt_nio"]

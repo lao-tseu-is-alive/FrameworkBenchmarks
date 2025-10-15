@@ -1,12 +1,9 @@
-use std::{
-    sync::Arc,
-    thread::{available_parallelism, spawn},
-};
+use std::sync::Arc;
 
 use viz::{
     header::{HeaderValue, SERVER},
     types::State,
-    Request, RequestExt, Response, ResponseExt, Result, Router, ServiceMaker,
+    Request, RequestExt, Response, ResponseExt, Result, Router,
 };
 use yarte::Template;
 
@@ -19,8 +16,8 @@ use db_pg::{get_conn, PgConnection};
 
 #[derive(Template)]
 #[template(path = "fortune.hbs")]
-pub struct FortunesTemplate<'a> {
-    pub fortunes: &'a Vec<models::Fortune>,
+pub struct FortunesTemplate {
+    pub fortunes: Vec<models::Fortune>,
 }
 
 const DB_URL: &str =
@@ -42,11 +39,9 @@ async fn fortunes(req: Request) -> Result<Response> {
 
     let fortunes = conn.tell_fortune().await?;
 
-    let buf = FortunesTemplate {
-        fortunes: &fortunes,
-    }
-    .call()
-    .expect("error rendering template");
+    let buf = FortunesTemplate { fortunes }
+        .call()
+        .expect("error rendering template");
 
     let mut res = Response::html(buf);
     res.headers_mut()
@@ -78,26 +73,7 @@ async fn updates(req: Request) -> Result<Response> {
     Ok(res)
 }
 
-fn main() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    for _ in 1..available_parallelism().map(|n| n.get()).unwrap_or(16) {
-        spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(serve());
-        });
-    }
-
-    rt.block_on(serve());
-}
-
-async fn serve() {
+async fn app() {
     let conn = PgConnection::connect(DB_URL).await;
 
     let app = Router::new()
@@ -107,8 +83,9 @@ async fn serve() {
         .get("/updates", updates)
         .with(State::new(conn));
 
-    server::builder()
-        .serve(ServiceMaker::from(app))
-        .await
-        .unwrap()
+    server::serve(app).await.unwrap()
+}
+
+fn main() {
+    server::run(app)
 }

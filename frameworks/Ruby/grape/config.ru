@@ -1,8 +1,11 @@
 require 'erb'
 require 'active_record'
 require 'yaml'
+require_relative 'config/auto_tune'
 
 MAX_PK = 10_000
+ID_RANGE = (1..MAX_PK).freeze
+ALL_IDS = ID_RANGE.to_a
 QUERIES_MIN = 1
 QUERIES_MAX = 500
 
@@ -32,12 +35,11 @@ module Acme
   end
 
   class DatabaseQueries < Grape::API
+    logger nil
     helpers do
       def bounded_queries
         queries = params[:queries].to_i
-        return QUERIES_MIN if queries < QUERIES_MIN
-        return QUERIES_MAX if queries > QUERIES_MAX
-        queries
+        queries.clamp(QUERIES_MIN, QUERIES_MAX)
       end
 
       # Return a random number between 1 and MAX_PK
@@ -47,27 +49,27 @@ module Acme
     end
 
     get '/db' do
-      ActiveRecord::Base.connection_pool.with_connection do
+      ActiveRecord::Base.with_connection do
         World.find(rand1).attributes
       end
     end
 
     get '/query' do
-      ActiveRecord::Base.connection_pool.with_connection do
-        Array.new(bounded_queries) do
-          World.find(rand1)
+      ActiveRecord::Base.with_connection do
+        ALL_IDS.sample(bounded_queries).map do |id|
+          World.find(id)
         end
       end
     end
 
     get '/updates' do
       worlds =
-        ActiveRecord::Base.connection_pool.with_connection do
-          Array.new(bounded_queries) do
-            world = World.find(rand1)
+        ActiveRecord::Base.with_connection do
+          ALL_IDS.sample(bounded_queries).map do |id|
+            world = World.find(id)
             new_value = rand1
             new_value = rand1 while new_value == world.randomNumber
-            world.update(randomNumber: new_value)
+            world.update_columns(randomNumber: new_value)
             world
           end
         end
@@ -76,9 +78,10 @@ module Acme
 
   class API < Grape::API
     before do
-      header 'Date', Time.now.httpdate
+      header 'Date', Time.now.httpdate if defined?(Puma)
       header 'Server', 'WebServer'
     end
+    logger nil
     content_type :json, 'application/json'
     format :json
 

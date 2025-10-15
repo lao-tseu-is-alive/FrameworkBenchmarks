@@ -1,5 +1,6 @@
 package com.techempower;
 
+import static com.techempower.Util.boxedRandomWorld;
 import static com.techempower.Util.randomWorld;
 import static io.jooby.ExecutionMode.EVENT_LOOP;
 import static io.jooby.MediaType.JSON;
@@ -28,22 +29,19 @@ public class App extends Jooby {
 
   private static final byte[] MESSAGE_BYTES = MESSAGE.getBytes(StandardCharsets.US_ASCII);
 
-  private static final ByteBuffer MESSAGE_BUFFER = (ByteBuffer) ByteBuffer
-      .allocateDirect(MESSAGE_BYTES.length)
-      .put(MESSAGE_BYTES)
-      .flip();
-
   {
-
     /** Database: */
     install(new HikariModule());
     DataSource ds = require(DataSource.class);
 
     /** Template engine: */
-    install(new RockerModule().reuseBuffer(true));
+    install(new RockerModule());
 
+    var outputFactory = getOutputFactory();
+    Json.configure(outputFactory);
+    var message = outputFactory.wrap(MESSAGE_BYTES);
     get("/plaintext", ctx ->
-        ctx.send(MESSAGE_BUFFER.duplicate())
+        ctx.send(message)
     );
 
     get("/json", ctx -> ctx
@@ -104,7 +102,7 @@ public class App extends Jooby {
               statement.setInt(1, randomWorld());
               try (ResultSet rs = statement.executeQuery()) {
                 rs.next();
-                result[i] = new World(rs.getInt("id"), randomWorld());
+                result[i] = new World(rs.getInt("id"), boxedRandomWorld());
               }
               // prepare update query
               updateSql.add("(?, ?)");

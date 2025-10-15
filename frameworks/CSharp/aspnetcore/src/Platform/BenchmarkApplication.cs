@@ -10,6 +10,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Http;
 using Microsoft.Extensions.ObjectPool;
+using Platform.Templates;
 using RazorSlices;
 
 namespace PlatformBenchmarks
@@ -40,14 +41,14 @@ namespace PlatformBenchmarks
 
         public static RawDb RawDb { get; set; }
 
-        private static readonly DefaultObjectPool<ChunkedBufferWriter<WriterAdapter>> ChunkedWriterPool
+        private static readonly DefaultObjectPool<ChunkedPipeWriter> ChunkedWriterPool
             = new(new ChunkedWriterObjectPolicy());
 
-        private sealed class ChunkedWriterObjectPolicy : IPooledObjectPolicy<ChunkedBufferWriter<WriterAdapter>>
+        private sealed class ChunkedWriterObjectPolicy : IPooledObjectPolicy<ChunkedPipeWriter>
         {
-            public ChunkedBufferWriter<WriterAdapter> Create() => new();
+            public ChunkedPipeWriter Create() => new();
 
-            public bool Return(ChunkedBufferWriter<WriterAdapter> writer)
+            public bool Return(ChunkedPipeWriter writer)
             {
                 writer.Reset();
                 return true;
@@ -55,9 +56,9 @@ namespace PlatformBenchmarks
         }
 
 #if NPGSQL
-        private readonly static SliceFactory<List<FortuneUtf8>> FortunesTemplateFactory = RazorSlice.ResolveSliceFactory<List<FortuneUtf8>>("/Templates/FortunesUtf8.cshtml");
+        private readonly static Func<List<FortuneUtf8>, RazorSlice<List<FortuneUtf8>>> FortunesTemplateFactory = FortunesUtf8.Create;
 #else
-        private readonly static SliceFactory<List<FortuneUtf16>> FortunesTemplateFactory = RazorSlice.ResolveSliceFactory<List<FortuneUtf16>>("/Templates/FortunesUtf16.cshtml");
+        private readonly static Func<List<FortuneUtf16>, RazorSlice<List<FortuneUtf16>>> FortunesTemplateFactory = FortunesUtf16.Create;
 #endif
 
         [ThreadStatic]
