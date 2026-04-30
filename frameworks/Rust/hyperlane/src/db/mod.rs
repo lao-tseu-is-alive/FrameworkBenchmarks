@@ -1,9 +1,7 @@
-pub(crate) mod r#fn;
-pub(crate) mod r#static;
-pub(crate) mod r#type;
+mod r#fn;
+mod r#static;
+mod r#type;
 
-pub use r#fn::*;
-pub use r#static::*;
-pub use r#type::*;
+pub(crate) use {r#fn::*, r#static::*, r#type::*};
 
 use super::*;

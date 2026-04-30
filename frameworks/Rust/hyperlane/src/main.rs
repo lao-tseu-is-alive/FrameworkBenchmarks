@@ -1,35 +1,49 @@
-pub(crate) mod db;
-pub(crate) mod middleware;
-pub(crate) mod route;
-pub(crate) mod server;
-pub(crate) mod utils;
+mod config;
+mod db;
+mod middleware;
+mod route;
+mod server;
+mod utils;
 
-pub(crate) use db::*;
-pub(crate) use server::*;
-pub(crate) use utils::*;
+use {config::*, db::*, middleware::*, route::*, server::*, utils::*};
 
-pub(crate) use std::fmt;
+use std::fmt;
 
-pub(crate) use futures::{executor::block_on, future::join_all};
-pub(crate) use hyperlane::{
-    tokio::{
-        runtime::{Builder, Runtime},
-        spawn,
-        task::JoinHandle,
+use {
+    futures::{executor::block_on, future::join_all},
+    hyperlane::{
+        tokio::{spawn, task::JoinHandle},
+        *,
     },
-    *,
-};
-pub(crate) use hyperlane_time::*;
-pub(crate) use once_cell::sync::Lazy;
-pub(crate) use rand::{Rng, SeedableRng, rng, rngs::SmallRng};
-pub(crate) use serde::*;
-pub(crate) use serde_json::{Value, json};
-pub(crate) use sqlx::{
-    Pool, Postgres, Row,
-    postgres::{PgPoolOptions, PgRow},
-    query as db_query,
+    hyperlane_time::*,
+    once_cell::sync::Lazy,
+    rand::{RngExt, SeedableRng, rng, rngs::SmallRng},
+    serde::*,
+    serde_json::{Value, json},
+    sqlx::{
+        Pool, Postgres, Row,
+        postgres::{PgPoolOptions, PgRow},
+        query as db_query,
+    },
 };
 
-fn main() {
-    run_server();
+#[tokio::main]
+async fn main() {
+    init_db().await;
+    Server::default()
+        .server_config(init_server_config())
+        .request_config(init_request_config())
+        .request_middleware::<RequestMiddleware>()
+        .route::<PlaintextRoute>("/plaintext")
+        .route::<JsonRoute>("/json")
+        .route::<CachedQueryRoute>("/cached-quer")
+        .route::<DbRoute>("/db")
+        .route::<QueryRoute>("/query")
+        .route::<FortunesRoute>("/fortunes")
+        .route::<UpdateRoute>("/upda")
+        .run()
+        .await
+        .unwrap()
+        .wait()
+        .await;
 }

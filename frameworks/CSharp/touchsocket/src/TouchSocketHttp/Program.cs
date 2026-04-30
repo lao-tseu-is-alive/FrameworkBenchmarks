@@ -1,7 +1,8 @@
+using System.Buffers;
+using System.IO.Pipelines;
 using System.Text;
 using TouchSocket.Core;
 using TouchSocket.Http;
-using TouchSocket.Sockets;
 using HttpContent = TouchSocket.Http.HttpContent;
 
 namespace TouchSocketHttp;
@@ -10,18 +11,34 @@ public class Program
 {
     private static async Task Main(string[] args)
     {
-        var port = 8080;
-        var service = new MyHttpService();
+        int port = 8080;
+        MyHttpService service = new MyHttpService();
 
         await service.SetupAsync(new TouchSocketConfig()
              .SetListenIPHosts(port)
-             .SetNoDelay(true)
-             .SetTransportOption(options =>
-             {
-                 options.ReceivePipeOptions = TransportOption.CreateSchedulerOptimizedPipeOptions();
-                 options.SendPipeOptions = TransportOption.CreateSchedulerOptimizedPipeOptions();
-             })
              .SetMaxCount(1000000)
+              .SetTransportOption(options =>
+              {
+                  options.BufferOnDemand = false;
+
+                  options.ReceivePipeOptions = new PipeOptions(
+                pool: MemoryPool<byte>.Shared,
+                readerScheduler: PipeScheduler.ThreadPool,
+                writerScheduler: PipeScheduler.ThreadPool,
+                pauseWriterThreshold: 2 * 1024 * 1024,
+                resumeWriterThreshold: 1024 * 1024,
+                minimumSegmentSize: 8192,
+                useSynchronizationContext: false);
+
+                  options.SendPipeOptions = new PipeOptions(
+                pool: MemoryPool<byte>.Shared,
+                readerScheduler: PipeScheduler.ThreadPool,
+                writerScheduler: PipeScheduler.ThreadPool,
+                pauseWriterThreshold: 128 * 1024,
+                resumeWriterThreshold: 64 * 1024,
+                minimumSegmentSize: 8192,
+                useSynchronizationContext: false);
+              })
              .ConfigureContainer(a =>
              {
                  a.AddConsoleLogger();
@@ -51,8 +68,8 @@ internal sealed class MyHttpSessionClient : HttpSessionClient
 
     protected override async Task OnReceivedHttpRequest(HttpContext httpContext)
     {
-        var request = httpContext.Request;
-        var response = httpContext.Response;
+        HttpRequest request = httpContext.Request;
+        HttpResponse response = httpContext.Response;
 
         switch (request.RelativeURL)
         {

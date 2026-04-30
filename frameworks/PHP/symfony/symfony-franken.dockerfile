@@ -1,12 +1,11 @@
-FROM dunglas/frankenphp:php8.4
+FROM dunglas/frankenphp:php8.5
 
 # add additional extensions here:
 RUN install-php-extensions \
-    opcache \
     pdo_pgsql \
     zip > /dev/null
 
-COPY --from=composer/composer:latest-bin --link /composer /usr/local/bin/composer
+COPY --from=composer/composer:2-bin --link /composer /usr/local/bin/composer
 
 COPY --link deploy/Caddyfile /etc/frankenphp/Caddyfile
 COPY --link deploy/conf/php.ini /usr/local/etc/php/

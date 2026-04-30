@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 QUERY_RANGE = (1..10_000).freeze
 ALL_IDS = QUERY_RANGE.to_a
 
@@ -7,19 +9,15 @@ HelloWorld::App.controllers  do
     response['Server'] = 'padrino'
   end
 
-  after do
-    response['Date'] = Time.now.httpdate
-  end if defined?(Puma)
-
   get '/json', :provides => [:json] do
-    {message: "Hello, World!"}.to_json
+    JSON.generate({message: "Hello, World!"})
   end
 
   get '/db', :provides => [:json] do
     world = ActiveRecord::Base.with_connection do
       World.find(rand1).attributes
     end
-    world.to_json
+    JSON.generate(world)
   end
 
   get '/queries', :provides => [:json] do
@@ -28,7 +26,7 @@ HelloWorld::App.controllers  do
         World.find(id).attributes
       end
     end
-    worlds.to_json
+    JSON.generate(worlds)
   end
 
   get '/fortunes' do
@@ -49,13 +47,13 @@ HelloWorld::App.controllers  do
         world = World.find(id)
         new_value = rand1
         new_value = rand1 while new_value == world.randomNumber
-        world.randomNumber = new_value
-        world
+        { id: id, randomNumber: new_value }
       end
+      worlds.sort_by!{_1[:id]}
       World.upsert_all(worlds)
     end
 
-    worlds.to_json
+    JSON.generate(worlds)
   end
 
   get '/plaintext' do

@@ -1,4 +1,4 @@
-FROM ruby:3.5-rc
+FROM ruby:4.0
 
 RUN apt-get update -yqq && apt-get install -yqq --no-install-recommends redis-server
 
@@ -6,11 +6,14 @@ EXPOSE 8080
 WORKDIR /rails
 
 # ENV RUBY_YJIT_ENABLE=1 YJIT is enabled in config/initializers/enable_yjit.rb
+ENV RUBY_MN_THREADS=1
 
 # Use Jemalloc
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libjemalloc2
 ENV LD_PRELOAD=libjemalloc.so.2
+
+RUN apt-get install -yqq nginx
 
 COPY ./Gemfile* /rails/
 
@@ -24,4 +27,5 @@ ENV RAILS_ENV=production_postgresql
 ENV PORT=8080
 ENV REDIS_URL=redis://localhost:6379/0
 CMD service redis-server start && \
+    nginx -c /rails/config/nginx.conf && \
     RACK_ENV=production bundle exec pitchfork -c config/pitchfork.rb
